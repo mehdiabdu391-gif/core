@@ -27,6 +27,7 @@ const (
 
 type Config struct {
 	Services map[string]ServiceConfig `yaml:"services"`
+	Logs     LogsConfig               `yaml:"logs"`
 }
 
 type ServiceConfig struct {

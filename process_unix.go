@@ -35,6 +35,11 @@ func signalProcess(pid int) error {
 	}
 	return p.Signal(syscall.SIGTERM)
 }
+
+// forceStopSupervisor is not used on Unix: a supervisor that ignores SIGTERM
+// for 30 seconds is reported, not killed, so its services aren't orphaned.
+func forceStopSupervisor(pid int) bool { return false }
+
 func processAlive(pid int) bool {
 	if pid <= 0 {
 		return false

@@ -26,13 +26,19 @@ func showLogs(service string, follow bool) error {
 		fmt.Printf("No log file: %s\n", path)
 		return nil
 	}
-	var offset int64
+	if !follow {
+		// Older rotated files first, so the output reads in time order.
+		for _, old := range rotatedLogs(path) {
+			if _, err := printNewLines(old, 0, true); err != nil {
+				return err
+			}
+		}
+	}
+	var t logTail
 	for {
-		next, err := printNewLines(path, offset, !follow)
-		if err != nil {
+		if err := t.poll(path, !follow, false, ""); err != nil {
 			return err
 		}
-		offset = next
 		if !follow {
 			return nil
 		}
@@ -40,8 +46,41 @@ func showLogs(service string, follow bool) error {
 	}
 }
 
+// logTail follows one log file across polls. It notices when the file is
+// rotated or replaced (a different file now has that name) and when it is
+// truncated, and starts the new file from the beginning in both cases.
+type logTail struct {
+	offset int64
+	info   os.FileInfo
+}
+
+func (t *logTail) poll(path string, flushPartial, prefix bool, name string) error {
+	info, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			t.offset, t.info = 0, nil
+			return nil
+		}
+		return err
+	}
+	if t.info != nil && !os.SameFile(t.info, info) {
+		// Rotated: finish what was written to the old file before the
+		// rename, then start the new one from the top.
+		if old, err := os.Stat(rotatedLogName(path, 1)); err == nil && os.SameFile(t.info, old) {
+			if _, err := printNewLinesPrefixed(rotatedLogName(path, 1), t.offset, true, prefix, name); err != nil {
+				return err
+			}
+		}
+		t.offset = 0
+	}
+	t.info = info
+	next, err := printNewLinesPrefixed(path, t.offset, flushPartial, prefix, name)
+	t.offset = next
+	return err
+}
+
 func showAllLogs(follow bool) error {
-	offsets := map[string]int64{}
+	tails := map[string]*logTail{}
 	for {
 		entries, err := os.ReadDir(logDir)
 		if err != nil {
@@ -59,11 +98,14 @@ func showAllLogs(follow bool) error {
 			if !follow {
 				fmt.Printf("\n===== %s =====\n", name)
 			}
-			next, err := printNewLinesPrefixed(path, offsets[name], !follow, follow, name)
-			if err != nil {
+			t := tails[name]
+			if t == nil {
+				t = &logTail{}
+				tails[name] = t
+			}
+			if err := t.poll(path, !follow, follow, name); err != nil {
 				return err
 			}
-			offsets[name] = next
 		}
 		if !follow {
 			return nil

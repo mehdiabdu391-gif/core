@@ -34,6 +34,11 @@ func LoadConfig() ([]Service, error) {
 	if len(config.Services) == 0 {
 		return nil, fmt.Errorf("core.yaml contains no services")
 	}
+	limits, err := normalizeLogsConfig(config.Logs)
+	if err != nil {
+		return nil, err
+	}
+	setLogLimits(limits)
 	if len(config.Services) > maxServices {
 		return nil, fmt.Errorf("too many services: maximum is %d", maxServices)
 	}

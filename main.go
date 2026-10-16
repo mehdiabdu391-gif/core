@@ -6,6 +6,7 @@ import (
 	"os/signal"
 	"sort"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -104,6 +105,8 @@ func run() {
 		return
 	}
 	shutdown := make(chan struct{})
+	stopRequested, stopWatch := watchStopRequest(os.Getpid())
+	defer close(stopWatch)
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
 	defer signal.Stop(signals)
@@ -113,6 +116,12 @@ func run() {
 	select {
 	case sig := <-signals:
 		fmt.Printf("\nReceived %s; stopping...\n", sig)
+		close(shutdown)
+		if err := <-done; err != nil {
+			fatal(err)
+		}
+	case <-stopRequested:
+		fmt.Println("\nStop requested; stopping...")
 		close(shutdown)
 		if err := <-done; err != nil {
 			fatal(err)
@@ -149,7 +158,51 @@ func stopRunningCore() (bool, error) {
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
+	if forceStopSupervisor(pid) {
+		for i := 0; i < 50; i++ {
+			if !processAlive(pid) {
+				_ = removeState()
+				_ = os.Remove(stopRequestFile)
+				fmt.Println("Core did not stop within 30 seconds and was ended forcefully.")
+				return true, nil
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+	}
 	return true, fmt.Errorf("Core (PID %d) did not exit within 30 seconds", pid)
+}
+
+const stopRequestFile = ".core/stop.request"
+
+// watchStopRequest polls for a stop request addressed to pid (written by
+// "core stop" on Windows) and closes the returned channel when one arrives.
+// A leftover request from an earlier run is removed first. Close quit to
+// end the watch.
+func watchStopRequest(pid int) (<-chan struct{}, chan struct{}) {
+	_ = os.Remove(stopRequestFile)
+	requested := make(chan struct{})
+	quit := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(250 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-quit:
+				return
+			case <-ticker.C:
+				data, err := os.ReadFile(stopRequestFile)
+				if err != nil {
+					continue
+				}
+				_ = os.Remove(stopRequestFile)
+				if strings.TrimSpace(string(data)) == strconv.Itoa(pid) {
+					close(requested)
+					return
+				}
+			}
+		}
+	}()
+	return requested, quit
 }
 
 func stop() {

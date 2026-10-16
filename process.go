@@ -31,11 +31,6 @@ func newProcessWait() *processWait   { return &processWait{done: make(chan struc
 func (w *processWait) set(err error) { w.once.Do(func() { w.err = err; close(w.done) }) }
 func (w *processWait) result() error { <-w.done; return w.err }
 
-type logSink struct {
-	mu   sync.Mutex
-	file *os.File
-}
-
 // runProcess starts one instance of a service and supervises it until it
 // exits, a dependency stops being ready (depDown closes), or shutdown closes.
 // depDown may be nil when the service has no dependencies.
@@ -67,7 +62,7 @@ func runProcess(service Service, shutdown <-chan struct{}, depDown <-chan struct
 	}
 	onPID(cmd.Process.Pid)
 	fmt.Printf("[%s] Started PID=%d\n", service.Name, cmd.Process.Pid)
-	sink := &logSink{file: logFile}
+	sink := newLogSink(logFile, currentLogLimits())
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go func() { defer wg.Done(); streamOutput(stdout, service.Name, sink) }()
@@ -80,7 +75,7 @@ func runProcess(service Service, shutdown <-chan struct{}, depDown <-chan struct
 		stopProcessTree(cmd, pw.done, service.StopTimeout)
 		_ = pw.result()
 		wg.Wait()
-		_ = logFile.Close()
+		sink.close()
 		switch {
 		case isClosed(shutdown):
 			return processResult{intentional: true}
@@ -98,7 +93,7 @@ func runProcess(service Service, shutdown <-chan struct{}, depDown <-chan struct
 	case <-pw.done:
 		err := pw.err
 		wg.Wait()
-		_ = logFile.Close()
+		sink.close()
 		if err != nil {
 			fmt.Printf("[%s] Exited: %v\n", service.Name, err)
 			return processResult{err: err}
@@ -110,14 +105,14 @@ func runProcess(service Service, shutdown <-chan struct{}, depDown <-chan struct
 		stopProcessTree(cmd, pw.done, service.StopTimeout)
 		_ = pw.result()
 		wg.Wait()
-		_ = logFile.Close()
+		sink.close()
 		return processResult{err: errDependencyFailed, dependencyDown: true}
 	case <-shutdown:
 		fmt.Printf("[%s] Stopping...\n", service.Name)
 		stopProcessTree(cmd, pw.done, service.StopTimeout)
 		_ = pw.result()
 		wg.Wait()
-		_ = logFile.Close()
+		sink.close()
 		return processResult{intentional: true}
 	}
 }
@@ -243,14 +238,10 @@ func streamOutput(pipe io.ReadCloser, name string, sink *logSink) {
 	for scanner.Scan() {
 		line := scanner.Text()
 		fmt.Printf("[%s] %s\n", name, line)
-		sink.mu.Lock()
-		_, _ = fmt.Fprintf(sink.file, "[%s] %s\n", time.Now().UTC().Format(time.RFC3339Nano), line)
-		sink.mu.Unlock()
+		sink.writeLine(fmt.Sprintf("[%s] %s\n", time.Now().UTC().Format(time.RFC3339Nano), line))
 	}
 	if err := scanner.Err(); err != nil && !errors.Is(err, os.ErrClosed) {
-		sink.mu.Lock()
-		_, _ = fmt.Fprintf(sink.file, "[%s] [core] output error: %v\n", time.Now().UTC().Format(time.RFC3339Nano), err)
-		sink.mu.Unlock()
+		sink.writeLine(fmt.Sprintf("[%s] [core] output error: %v\n", time.Now().UTC().Format(time.RFC3339Nano), err))
 	}
 }
 func openServiceLog(name string) (*os.File, error) {
