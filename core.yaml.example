@@ -1,0 +1,30 @@
+services:
+  database:
+    command: docker
+    args: [compose, up, postgres]
+    restart: always
+    healthcheck:
+      type: tcp
+      host: 127.0.0.1
+      port: 5432
+      interval: 2s
+      timeout: 1s
+      retries: 30
+
+  api:
+    command: go
+    args: [run, ./api]
+    depends_on: [database]
+    restart: on-failure
+    max_restarts: 10
+    backoff: 1s
+    stop_timeout: 5s
+    environment:
+      PORT: "8080"
+      DATABASE_URL: "postgres://localhost/app"
+    healthcheck:
+      type: http
+      url: http://127.0.0.1:8080/health
+      interval: 1s
+      timeout: 2s
+      retries: 30
