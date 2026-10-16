@@ -124,3 +124,9 @@ Core runs configured commands with the privileges of the user running it. A `cor
 
 - Logs are not rotated. Truncate or delete `.core/logs/*.log` when they grow.
 - On Windows, services are stopped forcefully, with no graceful SIGTERM phase.
+
+## License
+
+Copyright 2026 Mehdi Abdu Mohammed. All rights not granted by the license are reserved.
+
+Core is source-available under the [PolyForm Noncommercial License 1.0.0](LICENSE). It is free for personal and other noncommercial use. Companies need a commercial license from the author; see [COMMERCIAL.md](COMMERCIAL.md).
